@@ -1,0 +1,505 @@
+---
+output: 
+  word_document:
+    reference_docx: "reference_style.docx"
+---
+
+######## <br>
+
+######## Analysis Report
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+
+# Load necessary libraries here
+library(tidyverse)
+library(gtsummary)
+library(sjPlot)
+library(car)
+library(lmtest)
+library(janitor)
+library(flextable)
+library(ggplot2)
+library(lspline)
+library(splines)
+library(emmeans)
+library(ggeffects)
+library(ggplot2)
+library(patchwork)
+
+# Load the dataset
+load("hypoxia.Rdata")
+```
+
+# Study Overview / Introduction
+
+## Background / Study Population
+
+Obstructive sleep apnea (OSA) is a disorder characterized by partial or complete airway blockages during sleep, leading to oxygen desaturation or sleep arousal. While on the surface, OSA might seem innocuous, moderate to severe levels of OSA have been linked to an increased risk of cardiovascular morbidity and mortality. To investigate the connection between OSA and cardiovascular health, I aim to identify the relationship between the percentage of sleep time with Sao2 <90% (sleep time) and the intraoperative time-weighted average of mean arterial pressure (TWA MAP). Additionally, I will examine whether diabetes modifies the effect of sleep time on intraoperative blood pressure. To help answer the research question, I will utilize a data set from the Cleveland Clinic that includes 281 adult patients, all diagnosed with OSA within the past two years, who received laparoscopic bariatric procedures between the dates of June 2005 and December 2009.
+
+## Study Aims / Objectives
+
+This study will direct its focus to two objectives. The primary aim is to model the relationship between total sleep time spent at Sao2 less than 90% and intraoperative TWA MAP during laparoscopic bariatric procedures, ensuring that baseline patient characteristics and other potential confounders are accounted for. The secondary aim is to determine whether a diabetes diagnosis alters the strength or direction of the proposed relationship from the primary model.
+
+# Statistical Methods
+
+## Descriptive Statistics
+
+To describe the study sample, a comprehensive baseline characteristics table (Table 1) will be used to report summary statistics for the primary exposure (sleep time), primary outcome (TWA MAP), and all specified confounders. Continuous variables will be assessed for normality via visual inspection of histograms. Symmetrically distributed continuous variables will be summarized using means and standard deviations (SD), whereas skewed continuous variables will be reported using medians and interquartile ranges (IQR). Finally, categorical variables will be summarized using frequencies and percentages.
+
+## Analysis Plan for Aim 1
+
+To address the primary aim, I will fit a multiple linear regression model to quantify the association between the percentage of sleep time spent at SaO2 < 90% and intraoperative TWA MAP. This model will adjust for a selected set of clinical confounders: age, sex, race, BMI, smoking status, diabetes, hypertension, coronary artery disease, preoperative anti-hypertensive medication use, CPAP therapy, and surgery type. As detailed in the assumptions section below, I will evaluate the linearity of continuous predictors using Component+Residual plots. If the relationship between sleep time and intraoperative TWA MAP exhibits severe non-linearity, I will incorporate a linear spline and a restricted polynomial spline into the model to accurately capture the underlying data structure. The relative fit of the three models will be compared using a Likelihood Ratio Test (LRT) and the Akaike Information Criterion (AIC). To determine the overall statistical significance of sleep time percentage on intraoperative TWA MAP, I will conduct a partial F-test. Finally, to account for the increased risk of Type I error due to multiple hypothesis testing across the primary and secondary aims, I will apply a Bonferroni correction, setting the threshold for statistical significance at $\alpha = 0.025$.
+
+## Analysis Plan for Aim 2
+
+To address the secondary aim, I will adjust the multiple linear regression model to include an interaction term between the percentage of sleep time spent at SaO2 < 90% and whether a patient has a diabetes diagnosis. This interaction is designed to capture the effect of how the sleep time percentage on intraoperative TWA MAP differs by diabetes diagnosis. For the analysis, the same Bonferroni correction will be applied. Similar to before, a partial F-test will be used to determine the statistical significance of this interaction. Furthermore, to quantify this conditional relationship, I will utilize model contrasts to calculate the point estimates and 95% confidence intervals for the expected change in intraoperative TWA MAP when sleep time increases from 50% to 75%, specifically stratified by patients with and without diabetes. Consistent with the primary analysis, a Bonferroni correction will be applied, maintaining a significance threshold of $\alpha = 0.025$
+
+## Assumptions
+
+For the purposes of this analysis, I will focus exclusively on the assumption of linearity for the continuous predictors: sleep time, age, and body mass index (BMI). To evaluate whether this assumption is met, I will generate and inspect Component+Residual (CR) plots for each continuous variable after fitting the initial multiple linear regression model. I will assess linearity by observing whether the smoothed trend line of the data closely follows the fitted linear model line. If a CR plot indicates a severe non-linear relationship, I will account for this curvature by implementing a linear spline to ensure the model accurately reflects the underlying data structure.
+
+## Missing Data
+
+Since I am relying on electronic medical records for the data, it is unlikely for missingness to be informative of sleep time metrics or confounders. To handle missingness, list-wise deletion was utilized. Patients missing values for the primary exposure (sleep time), the primary outcome, or any of the specified clinical confounders were excluded from the cohort, yielding a final, complete dataset of 281 observations for this multiple linear regression analysis.
+
+# Results
+
+```{r Data Cleaning, include=FALSE}
+# This Chunk will not print, but is useful for data cleaning,
+# checking for missingness, and building models
+# Select necessary variables for analysis + pre-specified confounders
+my_vars <- c("Sleeptime",                 # Continuous (0 to 100 %)
+             "TWA MAP",                   # Continuous
+             "Age",                       # Discrete (Countably Infinite)
+             "Female",                    # Discrete (Nominal)
+             "Race",                      # Discrete (Nominal)
+             "BMI",                       # Continuous
+             "Smoking",                   # Discrete (Nominal)
+             "Diabetes",                  # Discrete (Nominal)
+             "Hyper",                     # Discrete (Nominal)
+             "CAD",                       # Discrete (Nominal)
+             "Preop AntiHyper Med",       # Discrete (Nominal)
+             "CPAP",                      # Discrete (Nominal)
+             "Type Surg"                  # Discrete (Nominal)
+             )
+
+# Create primary data set
+data <- hypoxia %>% 
+  select(all_of(my_vars))
+
+# Clean all column names in dataset at once
+data <- data %>%
+  clean_names()
+
+# Spot Check for extreme values (Should be safe according to the Dataset Introduction)
+summary(data)
+
+#Check for Missingness
+colSums(is.na(data))
+
+# Quick grid of histograms for all numeric variables to determine whether I should report means or medians in my Table one
+data %>%
+  # Select only the continuous/numeric variables
+  select(age, bmi, sleeptime, twa_map) %>%
+  # Reshape the data so ggplot can plot them all at once
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>%
+  
+  # Build the histogram plot
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  
+  # Create a separate panel for each variable and allow the x-axis to adjust freely
+  facet_wrap(~ variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Quick Distribution Check for Continuous Variables", x = NULL, y = "Count")
+
+# Report Means for age, twa_map, and bmi; median for sleeptime
+
+# Fit the multiple linear regression model (Aim 1)
+model_linear <- lm(twa_map ~ sleeptime + age + female + factor(race) + bmi + smoking + diabetes + hyper + cad + preop_anti_hyper_med + cpap + factor(type_surg),
+              data = data)
+
+# Fit the interaction model (Aim 2)
+model_interaction <- lm(twa_map ~ sleeptime * diabetes + age + bmi + female + factor(race) + 
+                          smoking + hyper + cad + 
+                          preop_anti_hyper_med + cpap + factor(type_surg), 
+                        data = data)
+```
+
+## Table 1: Descriptive Statistics of the Sample
+
+```{r Table One}
+# Recode factors and subset data 
+table1_data <- data %>%
+  # Convert numeric categories to descriptive factors based on the Data Dictionary
+  mutate(
+    race = factor(race, 
+                  levels = c(1, 2, 3), 
+                  labels = c("African American", "Caucasian", "Other")),
+    type_surg = factor(type_surg, 
+                       levels = c(1, 2, 3, 4), 
+                       labels = c("Gastroenterostomy", 
+                                  "Gastric restrictive procedure", 
+                                  "Gastroplasty", 
+                                  "Removal of gastric restrictive device")),
+    female = factor(female, levels = c(0, 1), labels = c("Male", "Female")),
+    smoking = factor(smoking, levels = c(0, 1), labels = c("No", "Yes")),
+    diabetes = factor(diabetes, levels = c(0, 1), labels = c("No", "Yes")),
+    hyper = factor(hyper, levels = c(0, 1), labels = c("No", "Yes")),
+    cad = factor(cad, levels = c(0, 1), labels = c("No", "Yes")),
+    preop_anti_hyper_med = factor(preop_anti_hyper_med, levels = c(0, 1), labels = c("No", "Yes")),
+    cpap = factor(cpap, levels = c(0, 1), labels = c("No", "Yes"))
+  ) %>%
+  # Keep only the variables needed for Table 1
+  select(sleeptime, twa_map, age, female, race, bmi, smoking, 
+         diabetes, hyper, cad, preop_anti_hyper_med, cpap, type_surg)
+
+# Build the table
+tbl_1 <- table1_data %>%
+  tbl_summary(
+    statistic = list(
+      # Keep Mean (SD) for things like Age, BMI, and TWA MAP
+      all_continuous() ~ "{mean} ({sd})",
+      # Force Sleeptime to use Median [IQR]
+      sleeptime ~ "{median} [{p25}, {p75}]",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany", 
+    missing_text = "Missing",
+    # Apply labels from the Hypoxia Data Dictionary
+    label = list(
+      sleeptime ~ "Time Spent at SaO2 < 90% (% of total sleep time)",
+      twa_map ~ "TWA of MAP during Surgery (mmHg)",
+      age ~ "Age (years)",
+      female ~ "Sex",
+      race ~ "Race",
+      bmi ~ "Body Mass Index (kg/m2)",
+      smoking ~ "Current smoker",
+      diabetes ~ "Diabetes",
+      hyper ~ "Hypertension",
+      cad ~ "Coronary Artery Disease",
+      preop_anti_hyper_med ~ "Antihypertensive Medication Preoperatively",
+      cpap ~ "Continuous Positive Airway Pressure Therapy",
+      type_surg ~ "Type of Surgery"
+    )
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  
+  # Convert to flextable for Word document export
+  as_flex_table() %>%
+  flextable::set_table_properties(layout = "autofit", width = 1)
+
+# View Table
+tbl_1
+```
+
+The final data set, after cleaning, contained 281 patients from the Cleveland Clinic’s dataset. Within this group, the median percentage of time spent with SaO2 <90% was 8%. Due to the skew of the data, 75% of patients’ sleep time fell between 1% and 27%. Meanwhile, the mean of intraoperative TWA MAP for the patients was 89 mmHg with a standard deviation of 11. Finally, only 97 out of the 281 patients, or 35%, had a comorbidity of diabetes. The data set is primarily composed of Caucasian women who received a gastroenterostomy.
+
+## Figure 1: Unadjusted Scatterplot of Sleep Time and Intraoperative TWA MAP with a 95% CI
+
+```{r scatter-plot, echo=FALSE, fig.height=4.6, fig.width=6.6, dpi=300, out.width="65%"}
+# Build the scatter plot
+p1 <- ggplot(data, aes(x = sleeptime, y = twa_map)) +
+  
+  # Scatter points
+  geom_point(color = "#00539B", alpha = 0.5, size = 2) + 
+  
+  # Regression line with shaded 95% Confidence Interval
+  geom_smooth(method = "lm", se = TRUE, color = "black", 
+              fill = "#00539B", alpha = 0.2, linewidth = 0.8) + 
+  
+  # Axis labels 
+  labs(
+    x = expression("Time spent at SaO"[2]*" < 90% (% of total sleep time)"),
+    y = "TWA of MAP during surgery (mmHg)"
+  ) +
+  
+  theme_classic() + 
+  theme(
+    axis.title = element_text(size = 11, face = "bold"),
+    axis.text = element_text(size = 10, color = "black"),
+    axis.line = element_line(color = "black", linewidth = 0.5),
+    axis.ticks = element_line(color = "black")
+  )
+
+# View Scatter Plot
+print(p1)
+```
+
+Figure one presents a scatter plot of the unadjusted association between sleep time and intraoperative TWA MAP. Upon visual inspection, there appears to be little association between the exposure and the outcome. Additionally, the data exhibits a heavy right skew, with the vast majority of patients clustered at very low percentages.
+
+
+## Figure 2: Component + Residual Plot of intraoperative TWA MAP and Sleep time
+
+
+```{r CRplot, echo=FALSE, fig.height=4.6, fig.width=6.6, dpi=300, out.width="65%"}
+# Extract the estimated coefficient for sleeptime from fitted model
+beta_sleeptime <- coef(model_linear)["sleeptime"]
+
+# Calculate the partial residual and add it as a new column to dataset
+data$partial_resid_sleeptime <- resid(model_linear) + (beta_sleeptime * data$sleeptime)
+
+# Build the CR plot
+cr_plot_sleeptime <- ggplot(data, aes(x = sleeptime, y = partial_resid_sleeptime)) +
+  
+  # Scatter points
+  geom_point(color = "gray50", alpha = 0.5, size = 1.5) + 
+  
+  # The Linear Component
+  geom_smooth(method = "lm", se = FALSE, color = "#00539B", 
+              linetype = "dashed", linewidth = 0.8) + 
+  
+  # The Smoothed Trend
+  geom_smooth(method = "loess", se = FALSE, color = "#D81B60", linewidth = 1) + 
+  
+  # Axis labels 
+  labs(
+    x = expression("Time spent at SaO"[2]*" < 90% (% of total sleep time)"),
+    y = "Component + Residual (Sleeptime)"
+  ) +
+  
+  theme_classic() + 
+  theme(
+    axis.title = element_text(size = 11, face = "bold"),
+    axis.text = element_text(size = 10, color = "black"),
+    axis.line = element_line(color = "black", linewidth = 0.5),
+    axis.ticks = element_line(color = "black")
+  )
+
+print(cr_plot_sleeptime)
+```
+
+Figure 1 presents a Component+Residual (CR) plot for the percentage of time spent at SaO2 < 90%. This plot was included to analyse whether there are any gross violations of linearity for the multivariable linear regression model. This plot represents the relationship between sleep time and intraoperative TWA MAP, while accounting for the pre-specified confounders. The pink line represents a smoothed fit of the data, and the dashed blue line represents the proposed linear fit. While there appear to be minor violations of linearity based on visual inspection, you will find in the appendix of this paper that I formally evaluated these deviations by comparing the linear model to a linear spline model and a restricted quadratic model. A Likelihood Ratio Test indicated no significant difference in model fit (p = 0.19 and p = 0.11, respectively), and the Akaike Information Criterion (AIC) difference was negligible (0.03 and 0.01, respectively). Therefore, the apparent non-linearity was not statistically significant. The assumption of linearity was considered adequately met, and the standard multiple linear regression model was retained for all subsequent analyses.
+
+## Results from the partial F test (Aim 1)
+
+```{r F Test for Aim 1, include=FALSE}
+# This chunk will not rpint, but is useful for running tests
+# Summarize Model for coefficients
+summary(model_linear)
+
+# Get the 95% Confidence Intervals for coefficients
+confint(model_linear, level = 0.95)
+
+# Build a reduced model that has everything EXCEPT sleeptime
+model_reduced <- lm(twa_map ~ age + female + factor(race) + bmi + smoking +
+                      diabetes + hyper + cad + preop_anti_hyper_med + cpap +
+                      factor(type_surg),
+                    data = data)
+
+# Compare the full model to the reduced model using anova()
+anova(model_reduced, model_linear)
+
+# Clean anmes for in line code
+anova_res <- anova(model_reduced, model_linear)
+anova_res <- anova_res %>%
+  clean_names()
+```
+
+In the primary analysis using a multiple linear regression model adjusting for all pre-specified confounders, I found no statistically significant association between the percentage of sleep time spent at SaO2 < 90% and intraoperative TWA MAP. The multivariable linear regression model predicted that for every 1% increase in sleep time spent at SaO2 < 90%, intraoperative TWA MAP decreases by `r -round(summary(model_linear)$coefficients[2,1],3)` (95% CI: `r round(confint(model_linear, level = 0.95)[2,1],3)` to `r round(confint(model_linear, level = 0.95)[2,2],3)`) mmHg, holding potential confounders constant. A partial F-test yielded an F-statistic of `r round(anova_res$f[2],3)` and a corresponding p-value of only `r round(anova_res$pr_f[2],3)`. Because this p-value exceeds the Bonferroni-corrected significance threshold of $\alpha = 0.025$, I fail to reject the null hypothesis. Therefore, the percentage of sleep time spent at SaO2 < 90% does not independently predict intraoperative TWA MAP.
+
+## Figure 3: Marginal effects plot of Diabetes on the association between sleep time and intraoperative TWA MAP
+
+```{r combined-interaction-plot, echo=FALSE, fig.height=4, fig.width=10, dpi=300, out.width="100%"}
+# Prepare the data
+# Generate predicted values (confounders held constant)
+predicted_data <- ggpredict(model_interaction, terms = c("sleeptime", "diabetes"))
+
+# Create the labeled factor for the raw data points
+data$diabetes_for_plot <- factor(data$diabetes, levels=c("0", "1"), labels=c("No", "Yes"))
+
+# Interaction plot w.o. data points
+plot_A <- ggplot(predicted_data, aes(x = x, y = predicted, color = group, fill = group)) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1.2) +
+  labs(
+    title = "A. Adjusted Marginal Effects",
+    x = expression("Time spent at SaO"[2]*" < 90% (% of total sleep time)"),
+    y = "Predicted Intraoperative TWA MAP (mmHg)",
+    color = "Diabetes", fill = "Diabetes"
+  ) +
+  theme_classic() +
+  theme(legend.position = "top", plot.title = element_text(face = "bold")) +
+  scale_color_manual(values = c("0" = "#00539B", "1" = "#D81B60"), labels = c("0" = "No", "1" = "Yes")) +
+  scale_fill_manual(values = c("0" = "#00539B", "1" = "#D81B60"), labels = c("0" = "No", "1" = "Yes"))
+
+# Interaction plot w. data points
+plot_B <- ggplot() +
+  geom_point(data = data, aes(x = sleeptime, y = twa_map, color = diabetes_for_plot),
+             alpha = 0.3, size = 1.5, stroke = 0) +
+  geom_ribbon(data = predicted_data, aes(x = x, ymin = conf.low, ymax = conf.high, 
+                                          group = group, fill = group), 
+              alpha = 0.2, color = NA) +
+  geom_line(data = predicted_data, aes(x = x, y = predicted, color = group, group = group), 
+            linewidth = 1.2) +
+  labs(
+    title = "B. Marginal Effects with Raw Data Overlay",
+    x = expression("Time spent at SaO"[2]*" < 90% (% of total sleep time)"),
+    y = NULL, # Removed Y axis label here so it doesn't repeat!
+    color = "Diabetes", fill = "Diabetes"
+  ) +
+  theme_classic() +
+  theme(legend.position = "top", plot.title = element_text(face = "bold")) +
+  scale_color_manual(values = c("0" = "#00539B", "1" = "#D81B60"), labels = c("0" = "No", "1" = "Yes")) +
+  scale_fill_manual(values = c("0" = "#00539B", "1" = "#D81B60"), labels = c("0" = "No", "1" = "Yes"))
+
+# Combine them using Patchwork
+combined_plot <- plot_A + plot_B + plot_layout(guides = "collect") & theme(legend.position = "top")
+
+print(combined_plot)
+```
+
+
+The above figures depict the marginal effect of diabetes on the relationship between sleep time and intraoperative TWA MAP, adjusted for the pre-specified confounders. Panel A displays the adjusted marginal linear trends with 95% confidence intervals, while Panel B overlays the unadjusted raw data points. Upon visual inspection, the relationship between sleep time and TWA MAP clearly diverges based on diabetes status. Specifically, for patients with a diabetes diagnosis, increased sleep time appears to be negatively associated with intraoperative TWA MAP. Conversely, for patients without diabetes, increased sleep time exhibits a positive association with intraoperative TWA MAP.
+
+## Results from Likelihood Ratio Test (Aim 2)
+
+```{r LRT (aim 2), include=FALSE}
+# Thus chunk will not print, but is useful for running secondary tests
+# Compare the model WITHOUT the interaction (model_linear from Aim 1) to the model WITH the interaction
+anova(model_linear, model_interaction)
+
+# Create object for inline code
+aim2res <- anova(model_linear, model_interaction)
+aim2res <- aim2res %>%
+  clean_names()
+
+
+# Calculate the estimated marginal means at exactly 50% and 75% for both the diabetic and non-diabetic groups
+emm <- emmeans(model_interaction, ~ sleeptime | diabetes, 
+               at = list(sleeptime = c(50, 75)))
+
+# Calculate the difference (75% minus 50%) for each group
+sleeptime_contrasts <- pairs(emm, reverse = TRUE)
+
+# Print the estimates, p-values, and 95% Confidence Intervals
+summary(sleeptime_contrasts, infer = c(TRUE, TRUE))
+
+# Create object for inline code
+contrast_res <- summary(sleeptime_contrasts, infer = c(TRUE, TRUE))
+```
+
+For the secondary aim, a partial F-test indicated that the interaction did not reach formal statistical significance (F = `r round(aim2res$f[2],3)`, p = `r round(aim2res$pr_f[2],3)`) based on the pre-specified Bonferroni-corrected threshold of $\alpha = 0.025$. To further explore this trend, I estimated the marginal effect of a 25% increase in sleep time (from 50% to 75%) on intraoperative TWA MAP for patients, stratified by diabetes diagnosis. The model estimated that the marginal difference of a 25% increase in sleep time led to a statistically insignificant (p = `r round(contrast_res$p.value[1],3)`) increase of intraoperative TWA MAP in non-diabetic patients by `r round(contrast_res$estimate[1],3)` mmHg (95% CI: `r round(contrast_res$lower.CL[1],3)` to `r round(contrast_res$upper.CL[1],3)`). Meanwhile, diabetic patients' intraoperative TWA MAP was expected to decrease by `r -round(contrast_res$estimate[2],3)` mmHg (95% CI: `r round(contrast_res$lower.CL[2],3)` to `r round(contrast_res$upper.CL[2],3)`). Although the confidence interval did not cross 0, this value was not formally statistically significant due to the Bonferroni correction (p = `r round(contrast_res$p.value[2],3)`).
+
+# Discussion
+
+
+## Main Takeaways
+
+This study sought to address two key objectives. The primary objective was to quantify the association between sleep time spent at Sao2 less than 90% and intraoperative TWA MAP during laparoscopic bariatric procedures, holding confounding characteristics constant. My analysis indicated that sleep time was not independently associated with intraoperative TWA MAP after accounting for potential confounders. Further research is required to determine whether alternative metrics of OSA severity are more predictive of cardiovascular health.
+
+<br>
+
+The second objective was to quantify the effect modification of a diabetes diagnosis on the relationship between sleep time spent at Sao2 less than 90% and intraoperative TWA MAP. Although the results of this study did not meet the threshold for formal statistical significance, promising clinical evidence was found to suggest that a diabetes diagnosis fundamentally alters the trajectory of the relationship between severe sleep apnea and intraoperative TWA MAP, shifting it from a positive to a negative association. The results of this objective warrant further research to determine the true impact of diabetes on this relationship. However, I exercise a strong sense of caution when interpreting the result of a marginal increase in sleep time, such as our example of a 25% increase, for diabetic and non-diabetic patients. Our data was strongly clustered for sleep times less than 10%, and comparatively sparse for patients with sleep times over 10%. As a result, the predictions percision is limited and could be shaped by the skewed data.
+
+
+## Limitations
+
+Two limitations I identified for this study concern our predictors, sleep time, and diabetes. The data for the predictor sleep time was highly right-skewed, with a large cluster of data under 10%. As a result, the power of the analysis decreased as sleep time increased. Nonetheless, I made predictions for the modification effect of diabetes on sleep times far outside of the main data cluster. As a result, these predictions had wide confidence intervals. Additionally, diabetes was coded as a “yes” or “no” variable. Such a coding structure misses the nuance of a comorbidity like diabetes that equates a patient who was diagnosed yesterday with a patient who has been insulin dependent for decades. As a result, our interaction term could be biased.
+
+## Future Research Directions
+
+In future research studies, I wonder how a model built on a more uniform distribution of data that did not experience such a harsh right skew would compare to this study’s model. Would a significant association between sleep time and intraoperative TWA MAP exist, or would the association still be insignificant? How drastically would the confidence intervals change in our second aim if the data were not as sparsely populated beyond 10% sleep time? Perhaps the results would be more of the same, but until a cleaner data set is created, we can only rely on results from heavily skewed data.
+
+## Collaboration Questions
+
+Given the opportunity to collaborate with clinical researchers, I would ask about the process for identifying confounders. In my own analysis of the data, I found strong evidence that coronary artery disease and smoking status were confounding variables in the data set. However, some of the other variables that were pre-specified were not nearly as strong. While I do not doubt that they are potential confounders, I would like to read some of the literature that led the researchers to identify certain comorbidities as confounders. I would also be interested in what other outcomes would be worth consideration, other than intraoperative TWA MAP, since it did not appear to be associated with the exposure sleep time.
+
+## Project Reflection
+
+I found this project to be extremely helpful in tying concepts together across sections from this semester. Compared to last year, the modules have felt a little bit more disjoint when I studied for our written exams. After this project, I feel like my understanding of modules 1 (used to build the linear model), 2 (used to test the linear model),3 (Used to test the interaction model), 8 (used to build the intercation module), and 9 (used to build alternative models and linearity test) and how they fit together has significantly improved. Things really started to click for me after generating the scatter and CR plot for the project. Dealing with troublesome data proved challenging, but it forced me to engage with the concepts at a deeper level and encouraged me to connect concepts across modules to model my objectives. I am currently working on my own research project with Avi, and we are about to begin building a model of our own, so the timing of this project could not have been better. I hope to apply what I learned in this project to my own research going forward.
+
+# Appendix
+
+## Table 2: Alternative Model Comparison via AIC and LRT
+
+```{r Alternative Models and Table}
+# Fit the multiple splined regression model
+model_spline <- lm(twa_map ~ lspline(sleeptime, 15) + age + bmi + female + factor(race) + 
+                     smoking + diabetes + hyper + 
+                     cad + preop_anti_hyper_med + 
+                     cpap + factor(type_surg), 
+                   data = data)
+
+# Fit the RCS
+model_rcs <- lm(twa_map ~ ns(sleeptime, df = 4) + age + bmi + female + factor(race) + 
+                     smoking + diabetes + hyper + 
+                     cad + preop_anti_hyper_med + 
+                     cpap + factor(type_surg), 
+                   data = data)
+
+# Run LRT tests (base model as reference)
+lrt_spline <- lrtest(model_linear, model_spline)
+lrt_rcs <- lrtest(model_linear, model_rcs)
+
+# Build the data frame for the table
+model_comp_df <- data.frame(
+  Model = c("Standard Linear (Reference)", 
+            "Linear Spline (Knot at 15%)", 
+            "Restricted Cubic Spline (df = 4)"),
+  
+  AIC = c(AIC(model_linear), 
+          AIC(model_spline), 
+          AIC(model_rcs)),
+  
+  # Extract the Chi-Square statistic from the 2nd row of the lrtest output
+  LRT_Statistic = c(NA, 
+                    lrt_spline$Chisq[2], 
+                    lrt_rcs$Chisq[2]),
+  
+  # Extract the p-value from the 2nd row of the lrtest output
+  LRT_p_value = c(NA, 
+                  lrt_spline$`Pr(>Chisq)`[2], 
+                  lrt_rcs$`Pr(>Chisq)`[2])
+)
+
+# Format the table using flextable for Word
+comparison_table <- flextable(model_comp_df) %>%
+  
+  # Rename the column headers
+  set_header_labels(
+    Model = "Model",
+    AIC = "AIC",
+    LRT_Statistic = "LRT Statistic (\u03C7\u00B2)", # Unicode for Chi-squared
+    LRT_p_value = "LRT p-value"
+  ) %>%
+  
+  # Format numbers: 2 decimals for stats, 3 for p-values
+  colformat_double(j = c("AIC", "LRT_Statistic"), digits = 2) %>%
+  colformat_double(j = "LRT_p_value", digits = 3) %>%
+  
+  # Replace the NAs in the reference row with an em dash
+  set_formatter(
+    LRT_Statistic = function(x) ifelse(is.na(x), "\u2014", sprintf("%.2f", x)),
+    LRT_p_value = function(x) ifelse(is.na(x), "\u2014", 
+                                     ifelse(x < 0.001, "<0.001", sprintf("%.3f", x)))
+  ) %>%
+  
+  bold(part = "header") %>%
+  autofit() %>%
+  add_footer_lines("Note: Likelihood Ratio Tests (LRT) compare the fit of the respective spline model against the standard linear reference model. AIC = Akaike Information Criterion.") %>%
+  
+  fontsize(part = "footer", size = 9) %>%
+  italic(part = "footer")
+
+# Print the table
+comparison_table
+```
+
+The above table displays the AIC and LRT results of the three models specified in the methods section of the primary aim. The linear spline had a knot at 15% due to the shape of the smoothed line in Figure 2, and a cubic spline was similarly selected. The AIC of each model was essentially identical, with no model showing a meaningful improvement over the other. Similarly, the LRT resulted in high p-values, indicating that the alternative models did not provide a statistically significant improvement on the standard linear model. As a result, the minimal improvements found in the alternative models did not justify the relative increase in complexity. These tests served as a formal assessment of the linearity assumption for our primary exposure and justified the use of the standard multivariable linear regression for our primary analysis.
+
+
+# References and AI Disclosure Statement
+
+Turan A, You J, Egan C, et al. Relationship between chronic intermittent hypoxia and intraoperative mean arterial pressure in obstructive sleep apnea patients having laparoscopic bariatric surgery. *Anesthesiology*. 2015;122(1):64-71. doi:10.1097/ALN.0000000000000457
+
+<br>
+
+*During the preparation of this work, the author utilized Google Gemini (an artificial intelligence language model) to assist with data analysis and manuscript formatting. Specifically, AI was used to generate and troubleshoot R programming code for data visualization, format statistical outputs, and refine table outputs. After using this tool, the author thoroughly reviewed, edited, and validated all statistical outputs, graphical representations, and clinical interpretations. The author takes full responsibility for the final content and accuracy of this manuscript.*
